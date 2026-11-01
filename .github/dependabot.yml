@@ -1,0 +1,26 @@
+# Version updates for the GitHub Actions and the npm dev dependencies. Each
+# waits until a release is a week old (cooldown), the same rule pnpm enforces
+# with minimumReleaseAge: a freshly published version is the likeliest to be
+# compromised or yanked. Security updates don't wait; they're turned on in the
+# repository's settings, not here.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      dev-dependencies:
+        patterns: ["*"]

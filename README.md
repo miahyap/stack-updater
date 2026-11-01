@@ -205,6 +205,11 @@ commands exit 0 when the stack ends up working, 1 when it doesn't.
 each decision above. `lib/alert.test.ts` starts a real Alertmanager, so it's
 skipped without a Docker daemon.
 
+## Security
+
+To report a vulnerability, or to verify that an image was built from this
+repository, see [SECURITY.md](SECURITY.md).
+
 ## Use of AI tools
 
 This repository was written with the help of AI coding tools, chiefly
