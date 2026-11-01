@@ -40,6 +40,11 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # The build provenance attestation: signed with this workflow's OIDC
+      # identity, kept in GitHub's attestation store and pushed beside the
+      # image (SECURITY.md, "Verifying the image").
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -73,6 +78,7 @@ jobs:
             type=raw,value=sha-${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -83,3 +89,14 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=stack-updater
           cache-to: type=gha,scope=stack-updater,mode=max
+          # An SBOM and full build provenance, as attestations in the image's
+          # index: what's in the image, and how it was built.
+          sbom: true
+          provenance: mode=max
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ github.repository }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
