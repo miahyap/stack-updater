@@ -1,0 +1,6 @@
+# Prettier formats code only. Prose (*.md) is wrapped by hand, and the YAML here
+# is hand-commented config whose layout is deliberate.
+*.md
+*.json
+*.yml
+*.yaml

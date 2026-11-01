@@ -1,0 +1,36 @@
+name: test
+
+# Every PR into main, plus main itself as a backstop for anything that reached
+# it without going through a PR.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # GitHub-hosted: it has the Docker daemon lib/alert.test.ts runs a real
+    # Alertmanager on, and the whole job is well under a minute.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # pnpm's version comes from package.json's `packageManager`.
+      - run: corepack enable
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm format:check
+
+      - run: pnpm lint
+
+      - run: pnpm test

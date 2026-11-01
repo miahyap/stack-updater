@@ -1,0 +1,85 @@
+name: release
+
+# Build the stack-updater image and publish it to GitHub Container Registry
+# (GHCR) as ghcr.io/<owner>/stack-updater. Every stack running :latest takes
+# it on its next run: an updater that runs every few minutes, within minutes.
+#
+# Triggered by the `test` workflow FINISHING, not by the push itself, so an
+# image from a commit whose tests failed is never published.
+
+on:
+  workflow_run:
+    workflows: [test]
+    types: [completed]
+    # Narrows the trigger only: this matches the tested run's HEAD BRANCH by
+    # name, and a pull request from a fork whose branch is called `main`
+    # matches too. The job's `if` is the real gate.
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build:
+    # Only a test run of a PUSH to this repo's own main. Without the last two
+    # conditions a fork's pull request from a branch named `main` would pass
+    # `branches` above, and this job would build the fork's commit (head_sha)
+    # and push it as :latest with this repo's token: an image that runs with
+    # the host's Docker socket on every stack. workflows.test.ts pins this.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # A workflow_run job runs on the default branch's head, which may be
+          # newer than the commit that was tested: build the tested one.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          # ghcr.io/<owner>/stack-updater: the repository's name is the
+          # image's.
+          images: ${{ env.REGISTRY }}/${{ github.repository }}
+          # The sha tag is spelled out rather than `type=sha`, which reads
+          # `github.sha` (the default branch head) and could label the image
+          # with a different commit than the one checked out above.
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=sha-${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          target: runner
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=stack-updater
+          cache-to: type=gha,scope=stack-updater,mode=max

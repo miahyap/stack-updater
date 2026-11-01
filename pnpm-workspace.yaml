@@ -1,0 +1,7 @@
+# Refuse to install any package version published less than a week ago
+# (10080 minutes). Newly published versions are the prime window for a
+# compromised or yanked release to slip in; pnpm transparently resolves to the
+# newest version that is already old enough. See CLAUDE.md "Dependencies".
+minimumReleaseAge: 10080
+allowBuilds:
+  esbuild: true

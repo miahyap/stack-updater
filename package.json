@@ -1,0 +1,21 @@
+{
+  "name": "stack-updater",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MPL-2.0",
+  "type": "module",
+  "packageManager": "pnpm@11.6.0",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit && sh -n update.sh && sh -n lib/alert.sh",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "prettier": "3.9.9",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
