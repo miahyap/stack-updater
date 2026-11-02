@@ -81,6 +81,9 @@ describe("release versions", () => {
     expect(RELEASE).toContain(
       "type=raw,value=latest,enable=${{ steps.version.outputs.version == '' }}",
     );
+    // metadata-action's default flavor, latest=auto, adds :latest to any
+    // semver build regardless of the line above: v1.0.0's build pushed it.
+    expect(RELEASE).toMatch(/^ {10}flavor: \|\n {12}latest=false$/m);
     expect(RELEASE).toMatch(
       /type=semver,pattern=\{\{major\}\},.*!startsWith\(steps\.version\.outputs\.version, 'v0\.'\)/,
     );
