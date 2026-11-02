@@ -1,8 +1,10 @@
 # Version updates for the GitHub Actions and the npm dev dependencies. Each
 # waits until a release is a week old (cooldown), the same rule pnpm enforces
 # with minimumReleaseAge: a freshly published version is the likeliest to be
-# compromised or yanked. Security updates don't wait; they're turned on in the
-# repository's settings, not here.
+# compromised or yanked. Security updates don't wait, and are turned on in the
+# repository's settings; one that needs a version under a week old fails
+# `pnpm install` until it's old enough (`@dependabot recreate` then).
+# dependabot-auto-merge.yml merges each PR once `test` passes.
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -24,3 +26,10 @@ updates:
     groups:
       dev-dependencies:
         patterns: ["*"]
+    ignore:
+      # Tracks the Node major CI runs (test.yml), not the newest.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # TypeScript 7 is a rewrite of the compiler: a migration of its own.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]

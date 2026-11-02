@@ -1,0 +1,29 @@
+name: dependabot auto-merge
+
+# Turns on auto-merge for Dependabot's pull requests, so each one merges once
+# the required `test` check passes (branch protection). A PR that fails stays
+# open for a person.
+#
+# Only Dependabot's: a PR's author can't be faked, and a fork's pull_request
+# run gets a read-only token anyway. workflows.test.ts pins the condition.
+#
+# The merge is made with this workflow's token, and GitHub doesn't start
+# workflows from such a push: no `test` or `release` runs on main for it. Test
+# tooling and Actions updates don't change the image; the next push that does
+# publishes them.
+
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]' && github.repository == 'miahyap/stack-updater'
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

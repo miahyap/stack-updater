@@ -36,3 +36,25 @@ describe("release workflow", () => {
     );
   });
 });
+
+// .github/workflows/dependabot-auto-merge.yml runs on every pull request with
+// a token that can merge: it must act on Dependabot's alone, never a fork's.
+const AUTO_MERGE = readFileSync(
+  join(import.meta.dirname, ".github", "workflows", "dependabot-auto-merge.yml"),
+  "utf8",
+);
+
+describe("dependabot auto-merge workflow", () => {
+  it("acts only on Dependabot's pull requests, in this repository", () => {
+    const job = AUTO_MERGE.match(/^ {4}if: (.*)$/m)?.[1];
+    expect(job).toContain("github.event.pull_request.user.login == 'dependabot[bot]'");
+    expect(job).toContain("github.repository == 'miahyap/stack-updater'");
+    expect(job).not.toContain("||");
+  });
+
+  it("runs on pull_request, never pull_request_target", () => {
+    // pull_request_target would run with a write token on a fork's PR.
+    expect(AUTO_MERGE).toMatch(/^on: pull_request$/m);
+    expect(AUTO_MERGE).not.toContain("pull_request_target");
+  });
+});
