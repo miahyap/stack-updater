@@ -1,8 +1,12 @@
 name: release
 
 # Build the stack-updater image and publish it to GitHub Container Registry
-# (GHCR) as ghcr.io/<owner>/stack-updater. Every stack running :latest takes
-# it on its next run: an updater that runs every few minutes, within minutes.
+# (GHCR) as ghcr.io/<owner>/stack-updater:
+#   - main:          :latest and :sha-<commit>. Every stack on :latest takes it
+#                    on its next run.
+#   - a tag v1.2.3:  :1.2.3, :1.2 and :1 (no major tag below 1.0), and
+#                    :sha-<commit>. Never :latest, so tagging an older commit
+#                    can't move it back.
 #
 # Triggered by the `test` workflow FINISHING, not by the push itself, so an
 # image from a commit whose tests failed is never published.
@@ -12,13 +16,16 @@ on:
     workflows: [test]
     types: [completed]
     # Narrows the trigger only: this matches the tested run's HEAD BRANCH by
-    # name, and a pull request from a fork whose branch is called `main`
-    # matches too. The job's `if` is the real gate.
-    branches: [main]
+    # name (a tag's run has the tag there), and a pull request from a fork
+    # whose branch is called `main` matches too. The job's `if` is the real
+    # gate.
+    branches: [main, "v*.*.*"]
   workflow_dispatch: {}
 
+# One group per branch or tag: github.ref is the default branch for every
+# workflow_run, so a tag's release would otherwise cancel main's.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event.workflow_run.head_branch || github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -63,6 +70,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The version, when this is a release tag's run: metadata-action reads
+      # only github.ref, which a workflow_run sets to the default branch.
+      - name: Release version
+        id: version
+        env:
+          HEAD: ${{ github.event.workflow_run.head_branch || github.ref_name }}
+        run: |
+          if printf '%s' "$HEAD" | grep -Eqx 'v[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "version=$HEAD" >>"$GITHUB_OUTPUT"
+          fi
+
       - name: Compute image tags
         id: meta
         uses: docker/metadata-action@v6
@@ -74,7 +92,10 @@ jobs:
           # `github.sha` (the default branch head) and could label the image
           # with a different commit than the one checked out above.
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ steps.version.outputs.version == '' }}
+            type=semver,pattern={{version}},value=${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.version != '' }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.version != '' }}
+            type=semver,pattern={{major}},value=${{ steps.version.outputs.version }},enable=${{ steps.version.outputs.version != '' && !startsWith(steps.version.outputs.version, 'v0.') }}
             type=raw,value=sha-${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Build and push

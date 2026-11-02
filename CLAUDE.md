@@ -33,6 +33,16 @@ README.md's settings table current.
 to this repo's own `main`. Never loosen its `if`: `workflow_run`'s `branches`
 filter matches a fork's branch named `main` too.
 
+## Releasing
+
+Semantic versioning. A release is a tag `vX.Y.Z` on a commit already on
+`main`: `gh release create vX.Y.Z --target main --generate-notes`. Its tests
+run again, then release.yml publishes `:X.Y.Z`, `:X.Y` and `:X` (not `:latest`,
+which follows `main`). A breaking change to settings or defaults is a new
+major: stacks pinned to `:X` would otherwise take it on their next run.
+`v*` tags can't be moved or deleted (a ruleset), so a bad release is fixed by
+the next one, never by moving its tag.
+
 ## License
 
 MPL-2.0 (LICENSE), file by file: a new source file starts with an

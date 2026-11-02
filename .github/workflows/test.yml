@@ -1,12 +1,14 @@
 name: test
 
 # Every PR into main, plus main itself as a backstop for anything that reached
-# it without going through a PR.
+# it without going through a PR, and every release tag (v1.2.3), which
+# release.yml publishes once this passes.
 on:
   pull_request:
     branches: [main]
   push:
     branches: [main]
+    tags: ["v*.*.*"]
 
 concurrency:
   group: test-${{ github.ref }}
