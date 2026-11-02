@@ -37,7 +37,8 @@ Add it to the stack's compose file:
 ```yaml
 services:
   updater:
-    image: ghcr.io/miahyap/stack-updater:latest
+    # A major version: its fixes and features, never a breaking change.
+    image: ghcr.io/miahyap/stack-updater:1
     restart: unless-stopped
     # Checks reach the services at their host ports, as clients do.
     network_mode: host
@@ -66,6 +67,24 @@ services:
 (`STACK_DIR`). Compose resolves relative paths (`./data`, an `env_file`)
 against the compose file's folder, and the host's Docker daemon has to find
 them there. It's writable because release tags are kept in `.env`.
+
+## Versions
+
+Releases follow [semantic versioning](https://semver.org): a breaking change
+(a setting renamed or removed, a default changed) is a new major version.
+
+| Tag | What it follows |
+|---|---|
+| `:1` | The newest 1.x release. Recommended |
+| `:1.2` | The newest 1.2.x release: fixes only |
+| `:1.2.3` | That release, never updated |
+| `:latest` | Every change merged to `main`, released or not |
+| `:sha-<commit>` | That commit's build |
+
+It updates itself like any other service, so the tag you give it is the one
+it follows: `:1` takes every 1.x release, and never 2.0. Each image is
+attested (SECURITY.md, "Verifying the image"). Release notes are on the
+[releases page](https://github.com/miahyap/stack-updater/releases).
 
 ## A run
 
