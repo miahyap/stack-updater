@@ -90,7 +90,16 @@ case $1 in
     esac ;;
   pull)
     k=$(key "$3")
-    [ -f "$STUB/pullfail/$k" ] && exit 1
+    if [ -f "$STUB/pullfail/$k" ]; then
+      # A number: fails that many times, then works. Empty: always fails.
+      n=$(cat "$STUB/pullfail/$k")
+      case $n in
+        "") ;;
+        1) rm "$STUB/pullfail/$k" ;;
+        *) echo $((n - 1)) >"$STUB/pullfail/$k" ;;
+      esac
+      exit 1
+    fi
     if [ -f "$STUB/registry/$k" ]; then cp "$STUB/registry/$k" "$STUB/ref/$k"
     elif [ ! -f "$STUB/ref/$k" ]; then exit 1; fi ;;
   inspect)
@@ -176,7 +185,18 @@ case $url in
 esac
 exit 0
 `,
-  sleep: "#!/bin/sh\nexit 0\n",
+  // Returns at once. The schedule never ends by itself: stop_after holds how
+  // many of its own sleeps (between runs and before a retry; not the checks'
+  // SETTLE and SEARCH_WAIT) it gets before it is stopped as `docker stop`
+  // stops it, with a TERM to the script, whose loop is what started the sleep.
+  sleep: `#!/bin/sh
+echo "$1" >>"$STUB/sleeps"
+if [ -f "$STUB/stop_after" ] \\
+  && [ "$(grep -cvxE '60|20' "$STUB/sleeps")" -ge "$(cat "$STUB/stop_after")" ]; then
+  case $1 in 60 | 20) ;; *) kill -TERM "$PPID" ;; esac
+fi
+exit 0
+`,
   flock: '#!/bin/sh\necho "$*" >>"$STUB/flocks"\nexit 0\n',
 };
 
@@ -239,6 +259,10 @@ interface Setup {
   blocked?: boolean;
   dumpFails?: boolean;
   pullFails?: string[];
+  /** How many times those pulls fail before they work. Unset: always. */
+  pullFailTimes?: number;
+  /** Stop a scheduled run at this many of the schedule's own sleeps. */
+  stopAfter?: number;
   /** The registries can't be listed. */
   tagsFail?: boolean;
   /** Windmill's tags come in two pages, the next release on the second. */
@@ -321,9 +345,11 @@ function stub(setup: Setup) {
   }
   for (const s of setup.pullFails ?? []) {
     const r = RELEASES[s];
-    writeFileSync(join(dir, "pullfail", key(resolve(s, env))), "");
-    if (r) writeFileSync(join(dir, "pullfail", key(`${repo(s)}:${r.next}`)), "");
+    const times = setup.pullFailTimes ? `${setup.pullFailTimes}\n` : "";
+    writeFileSync(join(dir, "pullfail", key(resolve(s, env))), times);
+    if (r) writeFileSync(join(dir, "pullfail", key(`${repo(s)}:${r.next}`)), times);
   }
+  if (setup.stopAfter) writeFileSync(join(dir, "stop_after"), `${setup.stopAfter}\n`);
   if (setup.ran) {
     writeFileSync(
       join(dir, "data", "images"),
@@ -345,18 +371,22 @@ function stub(setup: Setup) {
   return dir;
 }
 
-/** Run `update.sh <mode>` against a stubbed stack. */
-/** env: settings over the stubbed stack's; undefined leaves one out (spawnSync drops it). */
+/**
+ * Run `update.sh <mode>` against a stubbed stack; "schedule" is no argument,
+ * as the container runs it, and needs the setup's stopAfter to end.
+ * env: settings over the stubbed stack's; undefined leaves one out (spawnSync drops it).
+ */
 function run(
-  mode: "now" | "check",
+  mode: "now" | "check" | "schedule",
   setup: Setup = {},
   env: Record<string, string | undefined> = {},
 ) {
   const dir = stub(setup);
-  // "schedule": no argument, as the container runs it.
-  const args = mode === ("schedule" as string) ? [SCRIPT] : [SCRIPT, mode];
+  const args = mode === "schedule" ? [SCRIPT] : [SCRIPT, mode];
   const res = spawnSync("sh", args, {
     encoding: "utf8",
+    // A schedule that isn't stopped fails its test instead of hanging it.
+    timeout: 60_000,
     env: {
       ...process.env,
       PATH: `${dir}:${process.env.PATH}`,
@@ -412,6 +442,8 @@ function run(
     lockFiles: readdirSync(join(dir, "locks")),
     dumps: existsSync(join(dir, "backups")) ? readdirSync(join(dir, "backups")).sort() : [],
     pgurl: read("pgurl").trim(),
+    /** The schedule's own sleeps: between runs, and before a retry. */
+    waits: lines("sleeps").filter((s) => s !== "60" && s !== "20"),
     /** Containers started detached: the self-update helper. */
     helpers: lines("helpers"),
     /** Every -f any compose call was given. */
@@ -620,10 +652,75 @@ describe("update.sh", () => {
       const r = run("now");
       expect(r.pullAlerts.map((a) => a.is)).toEqual(["stack-update-pull:resolve"]);
     });
+
+    describe("in a scheduled run", () => {
+      // Hourly, so the schedule's sleeps are 3600 between runs and
+      // PULL_RETRY_WAIT (600) before a retry.
+      const hourly = { UPDATE_EVERY: "3600" };
+
+      it("have the run done again a little later, with no alert when that works", () => {
+        // The symptom: the network was down for a minute at the daily run (a
+        // router restarting after its own update), every pull failed, and the
+        // new images waited a day for the next run.
+        const r = run(
+          "schedule",
+          { newer: ["searxng"], pullFails: ["searxng"], pullFailTimes: 1, stopAfter: 3 },
+          hourly,
+        );
+        expect(r.status).toBe(0);
+        expect(r.waits).toEqual(["3600", "600", "3600"]);
+        expect(r.out).toContain("trying again in 600s (1 of 3)");
+        expect(r.running("searxng")).toBe(id("searxng", 2));
+        expect(r.pullAlerts.map((a) => a.is)).toEqual(["stack-update-pull:resolve"]);
+      });
+
+      it("raise the alert once, after the last try", () => {
+        const r = run(
+          "schedule",
+          { newer: ["searxng"], pullFails: ["searxng"], stopAfter: 4 },
+          { ...hourly, PULL_RETRIES: "2" },
+        );
+        expect(r.waits).toEqual(["3600", "600", "600", "3600"]);
+        expect(r.pulls.filter((p) => p === "searxng/searxng:latest")).toHaveLength(3);
+        expect(r.pullAlerts.map((a) => a.is)).toEqual(["stack-update-pull:raise"]);
+        expect(r.running("searxng")).toBe(id("searxng", 1));
+      });
+
+      it("update the rest on the first try, and only once", () => {
+        const r = run(
+          "schedule",
+          { newer: ["searxng", "sidecar"], pullFails: ["searxng"], pullFailTimes: 1, stopAfter: 3 },
+          hourly,
+        );
+        expect(r.created).toEqual(["sidecar", "searxng"]);
+      });
+
+      it("aren't tried again when the next run comes sooner, or with PULL_RETRIES=0", () => {
+        const failing = { newer: ["searxng"], pullFails: ["searxng"], stopAfter: 2 };
+        const often = run("schedule", failing, { UPDATE_EVERY: "300" });
+        expect(often.waits).toEqual(["300", "300"]);
+        expect(often.pullAlerts.map((a) => a.is)).toEqual(["stack-update-pull:raise"]);
+        const off = run("schedule", failing, { ...hourly, PULL_RETRIES: "0" });
+        expect(off.waits).toEqual(["3600", "3600"]);
+        expect(off.pullAlerts.map((a) => a.is)).toEqual(["stack-update-pull:raise"]);
+      });
+
+      it("aren't tried again by `now`: one update, reported at once", () => {
+        const r = run("now", { newer: ["searxng"], pullFails: ["searxng"] });
+        expect(r.waits).toEqual([]);
+        expect(r.pullAlerts.map((a) => a.is)).toEqual(["stack-update-pull:raise"]);
+      });
+
+      it("refuse a PULL_RETRY_WAIT that isn't a number", () => {
+        const r = run("schedule", {}, { PULL_RETRY_WAIT: "10m" });
+        expect(r.status).toBe(1);
+        expect(r.out).toContain("must be numbers");
+      });
+    });
   });
 
   it("refuses an UPDATE_EVERY shorter than a minute", () => {
-    const r = run("schedule" as "now", {}, { UPDATE_EVERY: "30" });
+    const r = run("schedule", {}, { UPDATE_EVERY: "30" });
     expect(r.status).toBe(1);
     expect(r.out).toContain("at least 60");
   });
