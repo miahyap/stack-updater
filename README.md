@@ -94,7 +94,10 @@ Daily at `UPDATE_AT` (in `TZ`), every `UPDATE_EVERY` seconds, or on demand:
    That's the way back, and it keeps the old image from `docker image prune`,
    which removes untagged images: a pull leaves the old one untagged.
 2. **Pulls each service** but itself: its tag, or its newest release. A
-   failed pull keeps what runs. A new image that was **held** (rolled back
+   failed pull keeps what runs, and a scheduled run is done again
+   `PULL_RETRY_WAIT` seconds later, up to `PULL_RETRIES` times (unless the
+   next run comes sooner): the network being down for a minute at
+   `UPDATE_AT` doesn't cost a day. A new image that was **held** (rolled back
    before) isn't taken: a floating tag is pointed at the running image again
    and a release tag in `.env` is left as it is, so another `up` meanwhile
    can't start it either. A newer image than the held one is tried as usual.
@@ -114,9 +117,9 @@ Daily at `UPDATE_AT` (in `TZ`), every `UPDATE_EVERY` seconds, or on demand:
    including another stack's.
 
 It raises `stack-update` in Alertmanager when it rolls back, holds, or is left
-broken, and `stack-update-pull` when a pull fails (an expired registry login
-would otherwise stop updates silently). A later run that comes out clean
-resolves them.
+broken, and `stack-update-pull` when a pull fails and so does every retry (an
+expired registry login would otherwise stop updates silently). A later run
+that comes out clean resolves them.
 
 ## Two ways to follow an image
 
@@ -175,6 +178,7 @@ the other's containers as changed.
 | `CHECKS` | — | Built-in checks to run, by name (below) |
 | `CHECK_URLS` | — | `name=url ...`: each must answer 2xx |
 | `NO_ROLLBACK` | — | Services never put back |
+| `PULL_RETRIES`, `PULL_RETRY_WAIT` | `3`, `600` | How many times a scheduled run is done again when a pull fails, and the seconds between; `0` retries never |
 | `SETTLE` | `60` | Seconds a service must stay up after the `up` |
 | `WAIT_TIMEOUT` | `600` | Seconds `up --wait` may take |
 | `CM_LOCK_DIR`, `CM_LOCK_WAIT` | —, `600` | Compose Manager's lock folder, and how long to wait for it before skipping a run |
@@ -207,7 +211,7 @@ says so.
 ## Running it by hand
 
     docker exec <container> sh /update.sh check    # the checks only; never alerts
-    docker exec <container> sh /update.sh now      # an update now (waits for a running one)
+    docker exec <container> sh /update.sh now      # an update now (waits for a running one; no retries)
     cat <data dir>/held                            # what's held back
 
 To take a held image anyway, delete its line from `held` and run `now`. Both

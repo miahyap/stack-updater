@@ -13,7 +13,9 @@
 #      it untagged, and is what a rollback puts back;
 #   2. pulls each service's tag, or its newest release (only ever forwards); an
 #      image it rolled back before is held back (the tag is pointed at the
-#      running image again, or .env left as it is), until a newer one comes;
+#      running image again, or .env left as it is), until a newer one comes.
+#      When a pull fails, the scheduled run is done again a little later
+#      ($PULL_RETRIES times, $PULL_RETRY_WAIT seconds apart);
 #   3. dumps the database of a service named windmill before a new Windmill
 #      starts on it: Windmill migrates its database on start, so its old image
 #      can't simply be put back. No dump, no Windmill update;
@@ -78,9 +80,16 @@ NO_ROLLBACK=${NO_ROLLBACK:-}
 # at once. How long to wait for it before skipping a run.
 CM_LOCK_DIR=${CM_LOCK_DIR:-}
 CM_LOCK_WAIT=${CM_LOCK_WAIT:-600}
+# A scheduled run in which a pull failed is done again this many times, this
+# many seconds apart, when that comes before the next run would: the network
+# down for a minute (a router restarting) shouldn't cost a day. 0: never.
+PULL_RETRIES=${PULL_RETRIES:-3}
+PULL_RETRY_WAIT=${PULL_RETRY_WAIT:-600}
 DATA_DIR=${DATA_DIR:-/data}
 HELD=$DATA_DIR/held
 LOCK=$DATA_DIR/lock
+# Left by a run whose pulls failed, for the schedule to try it again.
+RETRY=$DATA_DIR/pull-retry
 # Each service's image as the stack last ran it, "<service>\t<ref>": what
 # prune compares the stack with.
 IMAGES=$DATA_DIR/images
@@ -514,8 +523,13 @@ update() {
   done
 
   # A pull that keeps failing (an expired registry login) stops updates
-  # without breaking anything, so it would go unnoticed.
-  if [ -n "$pull_failed" ]; then
+  # without breaking anything, so it would go unnoticed. One that fails while
+  # the schedule has another try left (RETRY_AFTER) isn't reported yet: the
+  # last try is, if it fails too.
+  rm -f "$RETRY"
+  if [ -n "$pull_failed" ] && [ -n "${RETRY_AFTER:-}" ]; then
+    : >"$RETRY"
+  elif [ -n "$pull_failed" ]; then
     alert "$ALERT_NAME-pull" raise "Couldn't pull, so these weren't updated (a 403, \"denied\" or \"unauthorized\" from ghcr.io means the host's docker login has expired): $(printf '%s' "$pull_failed" | tr '\n' ';')"
   else
     alert "$ALERT_NAME-pull" resolve
@@ -609,6 +623,31 @@ until_next() {
   echo $((at - now))
 }
 
+# A scheduled run. Pulls that fail (the network down while a router restarts,
+# a registry's bad minute) would otherwise wait for the next run, a day away:
+# the run is done again PULL_RETRY_WAIT seconds later, up to PULL_RETRIES
+# times, unless the next run comes sooner than that. update holds its pull
+# alert back until the last of them. Outside the locks while it waits.
+scheduled() {
+  retries=0
+  while :; do
+    RETRY_AFTER=
+    [ "$retries" -lt "$PULL_RETRIES" ] && [ "$PULL_RETRY_WAIT" -lt "${UPDATE_EVERY:-$(until_next)}" ] \
+      && RETRY_AFTER=$PULL_RETRY_WAIT
+    rm -f "$RETRY"
+    locked update && locked prune
+    [ -n "$RETRY_AFTER" ] && [ -f "$RETRY" ] || break
+    retries=$((retries + 1))
+    log "pulls failed; trying again in ${PULL_RETRY_WAIT}s ($retries of $PULL_RETRIES)"
+    sleep "$PULL_RETRY_WAIT" &
+    wait $!
+  done
+  locked self_update
+}
+
+case $PULL_RETRIES$PULL_RETRY_WAIT in
+  *[!0-9]*) log "PULL_RETRIES and PULL_RETRY_WAIT must be numbers"; exit 1 ;;
+esac
 if [ -n "$UPDATE_EVERY" ]; then
   case $UPDATE_EVERY in *[!0-9]*) UPDATE_EVERY=0 ;; esac
   [ "$UPDATE_EVERY" -ge 60 ] || { log "UPDATE_EVERY must be a number of seconds, at least 60"; exit 1; }
@@ -623,6 +662,5 @@ trap 'exit 0' TERM INT
 while :; do
   sleep "${UPDATE_EVERY:-$(until_next)}" &
   wait $!
-  locked update && locked prune
-  locked self_update
+  scheduled
 done
